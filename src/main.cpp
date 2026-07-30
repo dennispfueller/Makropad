@@ -1,9 +1,9 @@
 #include <Arduino.h>
 #include <BleKeyboard.h>
 #include <Preferences.h>
-#include <ESPAsyncWebServer.h>
 #include <secrets.h>
 #include <WiFi.h>
+#include <ESPAsyncWebServer.h>
 
 BleKeyboard bleKeyboard;
 Preferences prefs;
@@ -79,6 +79,7 @@ String buildPage() {
     }
   }
   html += "</form></body></html>";
+  Serial.println("Website gebaut");
   return html;
 }
 
@@ -93,13 +94,30 @@ void setup() {
   pinMode(16, INPUT_PULLDOWN);
   pinMode(17, INPUT_PULLDOWN);
   pinMode(18, INPUT_PULLDOWN);
-  bleKeyboard.begin();
+  // bleKeyboard.begin();
   prefs.begin("makropad", true);
   if (prefs.isKey("keycodes")) {
     prefs.getBytes("keycodes", keycodes, sizeof(keycodes));
   }
   prefs.end();
+  WiFi.mode(WIFI_STA);
+  Serial.println("Verfügbare Netzwerke:");
+  int n = WiFi.scanNetworks();
+  for (int i = 0; i < n; i++) {
+    Serial.println(WiFi.SSID(i));
+  }
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("Verbunden, IP: ");
+  Serial.println(WiFi.localIP());
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/html", buildPage());
+  });
+  server.begin();
 }
 
 void loop() {
