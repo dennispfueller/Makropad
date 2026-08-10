@@ -5,16 +5,18 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <HTTPClient.h>
+#include <EPD_1in54g.h>
+#include <EPaperDisplay.h>
 
 BleKeyboard bleKeyboard;
 Preferences prefs;
 AsyncWebServer server(80);
 HTTPClient http;
+EPaperDisplay epaper;
 
-
-const unsigned long pollIntervall = 20 * 1000;
+const unsigned long pollIntervall = 40 * 1000;
 unsigned long lastPollTime = 0;
-String fluxQuery = "tempData = from(bucket: \"monitoring\") |> range(start: -30s) |> filter(fn: (r) => r._measurement == \"temp\") |> last() |> map(fn: (r) => ({_time: r._time, id: r.sensor, _value: r._value}))\n\ncpuData = from(bucket: \"monitoring\") |> range(start: -30s) |> filter(fn: (r) => r._measurement == \"cpu\" and r.cpu == \"cpu-total\" and r._field == \"usage_system\") |> last() |> map(fn: (r) => ({_time: r._time, id: \"cpu_usage\", _value: r._value}))\n\nunion(tables: [tempData, cpuData]) |> keep(columns: [\"_time\", \"id\", \"_value\"])";
+String fluxQuery = "tempData = from(bucket: \"monitoring\") |> range(start: -30s) |> filter(fn: (r) => r._measurement == \"temp\") |> last() |> map(fn: (r) => ({_time: r._time, id: r.sensor, _value: r._value}))\n\ncpuData = from(bucket: \"monitoring\") |> range(start: -30s) |> filter(fn: (r) => r._measurement == \"cpu\" and r.cpu == \"cpu-total\" and r._field == \"usage_idle\") |> last() |> map(fn: (r) => ({_time: r._time, id: \"cpu_usage\", _value: r._value}))\n\nunion(tables: [tempData, cpuData]) |> keep(columns: [\"_time\", \"id\", \"_value\"])";
 
 const char* NVS_KEY_KEYCODES = "keycodes";
 const int rows[3] = {4, 5, 6};
@@ -191,6 +193,22 @@ void evaluateString(String string) {
   Serial.println("core 0: " + sensorData.coretemp_core_0);
 }
 
+bool getServerData() {
+  if (pollIntervall < millis() - lastPollTime) {
+    int httpCode = http.POST(fluxQuery);
+    lastPollTime = millis();
+    if (httpCode == 200) {
+      String response = http.getString();
+      evaluateString(response);
+      return true;
+    } else {
+      return false;
+      // Fehler auf Display anzeigen
+    }
+  }
+  return false;
+}
+
 void checkKeyPress() {
   if (bleKeyboard.isConnected()) {
     for (int row = 0; row < 3; row++) {
@@ -204,6 +222,22 @@ void checkKeyPress() {
       digitalWrite(rows[row], LOW);
     }
   }
+}
+
+void drawDashboard() {
+  DEV_Module_Init();
+  EPD_1IN54G_Init();
+  epaper.fillScreen(EPD_1IN54G_WHITE);
+  epaper.setTextColor(EPD_1IN54G_BLACK);
+  epaper.setTextSize(2);
+  epaper.setCursor(0, 10);
+  epaper.println("CPU Temp: " + sensorData.coretemp_package_id_0 + "C");
+  epaper.println("MB Temp: " + sensorData.pch_cometlake + "C");
+  String cpuUsage = String(100 - sensorData.cpu_usage.toFloat(), 2);
+  cpuUsage.replace(".", ",");
+  epaper.println("CPU Usage: " + cpuUsage + "%");
+  epaper.display();
+  EPD_1IN54G_Sleep();
 }
 
 void setup() {
@@ -271,14 +305,7 @@ void setup() {
 void loop() {
   checkKeyPress();
 
-  if (pollIntervall < millis() - lastPollTime) {
-    int httpCode = http.POST(fluxQuery);
-    lastPollTime = millis();
-    if (httpCode == 200) {
-      String response = http.getString();
-      evaluateString(response);
-    } else {
-      // Fehler auf Display anzeigen
-    }
+  if (getServerData()) {
+    drawDashboard();
   }
 }
