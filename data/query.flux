@@ -1,0 +1,26 @@
+tempData = from(bucket: "monitoring")
+    |> range(start: -30s)
+    |> filter(fn: (r) => r._measurement == "temp")
+    |> last()
+    |> map(fn: (r) => ({_time: r._time, id: r.sensor, _value: float(v: r._value)}))
+
+cpuData = from(bucket: "monitoring")
+    |> range(start: -30s)
+    |> filter(fn: (r) => r._measurement == "cpu" and r.cpu == "cpu-total" and r._field == "usage_idle")
+    |> last()
+    |> map(fn: (r) => ({_time: r._time, id: "cpu_usage", _value: float(v: r._value)}))
+
+diskData = from(bucket: "monitoring")
+    |> range(start: -30s)
+    |> filter(fn: (r) => r._measurement == "disk" and r._field == "used" and r.path == "/rootfs" or r._field == "used_percent" and r.path == "/rootfs")
+    |> last()
+    |> map(fn: (r) => ({_time: r._time, id: "disk_" + r._field, _value: float(v: r._value)}))
+
+memoryData = from(bucket: "monitoring")
+    |> range(start: -30s)
+    |> filter(fn: (r) => r._measurement == "mem" and r._field == "used" or r._field == "used_percent")
+    |> last()
+    |> map(fn: (r) => ({_time: r._time, id: "memory_" + r._field, _value: float(v: r._value)}))
+
+union(tables: [tempData, cpuData, diskData, memoryData])
+    |> keep(columns: ["_time", "id", "_value"])

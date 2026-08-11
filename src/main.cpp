@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <map>
+#include <LittleFS.h>
 #include <BleKeyboard.h>
 #include <Preferences.h>
 #include <secrets.h>
@@ -16,7 +18,7 @@ EPaperDisplay epaper;
 
 const unsigned long pollIntervall = 40 * 1000;
 unsigned long lastPollTime = 0;
-String fluxQuery = "tempData = from(bucket: \"monitoring\") |> range(start: -30s) |> filter(fn: (r) => r._measurement == \"temp\") |> last() |> map(fn: (r) => ({_time: r._time, id: r.sensor, _value: r._value}))\n\ncpuData = from(bucket: \"monitoring\") |> range(start: -30s) |> filter(fn: (r) => r._measurement == \"cpu\" and r.cpu == \"cpu-total\" and r._field == \"usage_idle\") |> last() |> map(fn: (r) => ({_time: r._time, id: \"cpu_usage\", _value: r._value}))\n\nunion(tables: [tempData, cpuData]) |> keep(columns: [\"_time\", \"id\", \"_value\"])";
+String fluxQuery;
 
 const char* NVS_KEY_KEYCODES = "keycodes";
 const int rows[3] = {4, 5, 6};
@@ -51,11 +53,39 @@ struct ColumnIndices {
 } columnIndices;
 
 struct SensorData {
-  String coretemp_package_id_0;
-  String coretemp_core_0;
-  String cpu_usage;
-  String pch_cometlake;
+  String coretemp_package_id_0;     // CPU Durchschnittstemperatur aller Kerne
+  String coretemp_core_0;           // Temperatur Kern 1
+  String coretemp_core_1;           // Temperatur Kern 2
+  String coretemp_core_2;           // Temperatur Kern 3
+  String coretemp_core_3;           // Temperatur Kern 4
+  String coretemp_core_4;           // Temperatur Kern 5
+  String coretemp_core_5;           // Temperatur Kern 6
+  String pch_cometlake;             // Chipsatz Temperatur
+  String cpu_usage;                 // ~Usage idle -> 100 - cpu_usage = tatsächliche Auslastung
+  String disk_used;                 // Auslastung in Bytes
+  String disk_used_percent;         // Auslastung in Prozent
+  String memory_used;               // Auslastung in Bytes
+  String memory_used_percent;       // Auslastung in Prozent
 } sensorData;
+
+std::map<String, String*> fieldMap = {
+  {"coretemp_package_id_0", &sensorData.coretemp_package_id_0},
+  {"coretemp_core_0", &sensorData.coretemp_core_0},
+  {"coretemp_core_1", &sensorData.coretemp_core_1},
+  {"coretemp_core_2", &sensorData.coretemp_core_2},
+  {"coretemp_core_3", &sensorData.coretemp_core_3},
+  {"coretemp_core_4", &sensorData.coretemp_core_4},
+  {"coretemp_core_5", &sensorData.coretemp_core_5},
+  {"pch_cometlake", &sensorData.pch_cometlake},
+  {"cpu_usage", &sensorData.cpu_usage},
+  {"disk_used", &sensorData.disk_used},
+  {"disk_used_percent", &sensorData.disk_used_percent},
+  {"memory_used", &sensorData.memory_used},
+  {"memory_used_percent", &sensorData.memory_used_percent},
+};
+
+int displayMode = 0;
+bool refreshDisplay = true;
 
 bool lastState[3][5] = {false};
 bool lastRawState[3][5] = {false};
@@ -87,6 +117,45 @@ void typeKeys(bool currentState, int row, int column) {
     for (int key = 0; key < 4; key++) {
       if (keycodes[row][column][key] == 0) break;
       bleKeyboard.release(keycodes[row][column][key]);
+    }
+  }
+}
+
+void checkKeyPress() {
+  if (bleKeyboard.isConnected()) {
+    for (int row = 0; row < 3; row++) {
+      digitalWrite(rows[row], HIGH);
+      for (int column = 0; column < 5; column++) {
+        bool currentState = digitalRead(columns[column]);
+        if (checkKeyAction(row, column, currentState)) {
+          if (column != 4) {
+            typeKeys(currentState, row, column);
+          } else if (column == 4 and row == 0 and currentState) {
+            if (refreshDisplay) {
+              refreshDisplay = false;
+            } else {
+              refreshDisplay = true;
+            }
+          } else if (column == 4 and row == 1 and currentState) {
+            if (displayMode >= 3) {
+              displayMode = 0;
+              Serial.println(displayMode);
+            } else {
+              displayMode++;
+              Serial.println(displayMode);
+            }
+          } else if (column == 4 and row == 2 and currentState) {
+            if (displayMode <= 0) {
+              displayMode = 3;
+              Serial.println(displayMode);
+            } else {
+              displayMode--;
+              Serial.println(displayMode);
+            }
+          }
+        }
+      }
+      digitalWrite(rows[row], LOW);
     }
   }
 }
@@ -171,79 +240,248 @@ void evaluateString(String string) {
     }
     index++;
     startPosition = endPosition + 1;
-    Serial.println("Sensor: " + sensor);
-    Serial.println("Value: " + value);
-
-    if (sensor == "coretemp_package_id_0") {
-      sensorData.coretemp_package_id_0 = value;
-    }
-    else if (sensor == "coretemp_core_0") {
-      sensorData.coretemp_core_0 = value;
-    }
-    else if (sensor == "pch_cometlake") {
-      sensorData.pch_cometlake = value;
-    }
-    else if (sensor == "cpu_usage") {
-      sensorData.cpu_usage = value;
+    
+    // Weißt den Sensoren die Daten zu
+    auto it = fieldMap.find(sensor);
+    if (it != fieldMap.end()) {
+      *(it->second) = value;
     }
   }
   Serial.println("package: " + sensorData.coretemp_package_id_0);
   Serial.println("cometlake: " + sensorData.pch_cometlake);
   Serial.println("usage: " + sensorData.cpu_usage);
   Serial.println("core 0: " + sensorData.coretemp_core_0);
+  Serial.println("core 1: " + sensorData.coretemp_core_1);
+  Serial.println("core 2: " + sensorData.coretemp_core_2);
+  Serial.println("core 3: " + sensorData.coretemp_core_3);
+  Serial.println("core 4: " + sensorData.coretemp_core_4);
+  Serial.println("core 5: " + sensorData.coretemp_core_5);
+  Serial.println("Used space: " + sensorData.disk_used);
+  Serial.println("Used space: " + sensorData.disk_used_percent);
+  Serial.println("Used memory: " + sensorData.memory_used);
+  Serial.println("Used memory: " + sensorData.memory_used_percent);
+}
+
+void drawErrorDisplay(int error) {
+  epaper.fillScreen(EPD_1IN54G_WHITE);
+  epaper.setTextColor(EPD_1IN54G_BLACK);
+  epaper.setTextSize(2);
+  epaper.setCursor(0, 10);
+  epaper.println(String(error));
+  epaper.display();
+  EPD_1IN54G_Sleep();
 }
 
 bool getServerData() {
+  http.begin("http://192.168.178.73:8086/api/v2/query?org=home");
+  http.addHeader("Authorization", "Token " + String(INFLUX_TOKEN));
+  http.addHeader("Content-Type", "application/vnd.flux");
+
   if (pollIntervall < millis() - lastPollTime) {
     int httpCode = http.POST(fluxQuery);
     lastPollTime = millis();
     if (httpCode == 200) {
       String response = http.getString();
       evaluateString(response);
+      http.end();
       return true;
     } else {
+      String errorBody = http.getString();
+      Serial.println("HTTP " + String(httpCode) + ": " + errorBody);
+      drawErrorDisplay(httpCode);
+      http.end();
       return false;
-      // Fehler auf Display anzeigen
     }
   }
+  http.end();
   return false;
 }
 
-void checkKeyPress() {
-  if (bleKeyboard.isConnected()) {
-    for (int row = 0; row < 3; row++) {
-      digitalWrite(rows[row], HIGH);
-      for (int column = 0; column < 5; column++) {
-        bool currentState = digitalRead(columns[column]);
-        if (checkKeyAction(row, column, currentState)) {
-          typeKeys(currentState, row, column);
-        }
-      }
-      digitalWrite(rows[row], LOW);
-    }
+void drawCpuMode() {
+  epaper.fillScreen(EPD_1IN54G_WHITE);
+  epaper.setTextColor(EPD_1IN54G_BLACK);
+
+  epaper.setTextSize(1);
+  epaper.setCursor(5, 5);
+  epaper.print("CPU");
+
+  // Große zentrierte Auslastungsanzeige
+  float usage = 100 - sensorData.cpu_usage.toFloat();
+  String usageStr = String((int)usage) + "%";
+  epaper.setTextSize(4);
+  int16_t x1, y1; uint16_t w, h;
+  epaper.getTextBounds(usageStr, 0, 0, &x1, &y1, &w, &h); // berechnet Pixelbreite/-höhe des Texts, um ihn zu zentrieren
+  epaper.setCursor((200 - w) / 2, 40);
+  epaper.print(usageStr);
+
+  // 6 Balken für die Kerntemperaturen, Höhe skaliert zwischen 30-70°C
+  float temps[6] = {
+    sensorData.coretemp_core_0.toFloat(), sensorData.coretemp_core_1.toFloat(),
+    sensorData.coretemp_core_2.toFloat(), sensorData.coretemp_core_3.toFloat(),
+    sensorData.coretemp_core_4.toFloat(), sensorData.coretemp_core_5.toFloat()
+  };
+  int barTop = 110, barBottom = 170, barW = 20, gap = 6;
+  int startX = (200 - (6 * barW + 5 * gap)) / 2;
+  for (int i = 0; i < 6; i++) {
+    int barHeight = map(constrain((int)temps[i], 30, 70), 30, 70, 5, barBottom - barTop);
+    int x = startX + i * (barW + gap);
+    epaper.drawRect(x, barTop, barW, barBottom - barTop, EPD_1IN54G_BLACK);
+    epaper.fillRect(x, barBottom - barHeight, barW, barHeight, EPD_1IN54G_BLACK);
   }
+
+  epaper.setTextSize(1);
+  epaper.setCursor(5, 185);
+  epaper.print("Pkg " + sensorData.coretemp_package_id_0 + "C  PCH " + sensorData.pch_cometlake + "C");
+
+  epaper.display();
+}
+
+void drawDiskMode() {
+  epaper.fillScreen(EPD_1IN54G_WHITE);
+  epaper.setTextColor(EPD_1IN54G_BLACK);
+
+  epaper.setTextSize(1);
+  epaper.setCursor(5, 5);
+  epaper.print("DISK");
+
+  float percent = sensorData.disk_used_percent.toFloat();
+  int cx = 100, cy = 105, radius = 70, thickness = 14;
+
+  // Ring als Gauge: äußerer und innerer Kreisrand
+  epaper.drawCircle(cx, cy, radius, EPD_1IN54G_BLACK);
+  epaper.drawCircle(cx, cy, radius - thickness, EPD_1IN54G_BLACK);
+
+  // Füllung des Rings per Radial-Linien, ein Grad pro Prozentpunkt*3.6
+  int steps = (int)(percent * 3.6);
+  for (int deg = 0; deg < steps; deg++) {
+    float rad = (deg - 90) * PI / 180.0; // -90 = Start bei 12 Uhr statt 3 Uhr
+    int xOuter = cx + cos(rad) * radius;
+    int yOuter = cy + sin(rad) * radius;
+    int xInner = cx + cos(rad) * (radius - thickness);
+    int yInner = cy + sin(rad) * (radius - thickness);
+    epaper.drawLine(xInner, yInner, xOuter, yOuter, EPD_1IN54G_BLACK);
+  }
+
+  String percentStr = String((int)percent) + "%";
+  epaper.setTextSize(3);
+  int16_t x1, y1; uint16_t w, h;
+  epaper.getTextBounds(percentStr, 0, 0, &x1, &y1, &w, &h);
+  epaper.setCursor(cx - w / 2, cy - h / 2);
+  epaper.print(percentStr);
+
+  float usedGB = sensorData.disk_used.toFloat() / 1073741824.0;
+  String usedStr = String(usedGB, 1) + " GB";
+  epaper.setTextSize(1);
+  epaper.getTextBounds(usedStr, 0, 0, &x1, &y1, &w, &h);
+  epaper.setCursor(cx - w / 2, cy + 22);
+  epaper.print(usedStr);
+
+  epaper.display();
+}
+
+void drawMemoryMode() {
+  epaper.fillScreen(EPD_1IN54G_WHITE);
+  epaper.setTextColor(EPD_1IN54G_BLACK);
+
+  epaper.setTextSize(1);
+  epaper.setCursor(5, 5);
+  epaper.print("MEMORY");
+
+  float percent = sensorData.memory_used_percent.toFloat();
+  int barX = 70, barY = 30, barW = 60, barH = 130;
+
+  epaper.drawRect(barX, barY, barW, barH, EPD_1IN54G_BLACK);
+  int fillH = (int)(barH * percent / 100.0);
+  epaper.fillRect(barX, barY + barH - fillH, barW, fillH, EPD_1IN54G_BLACK);
+
+  // Markierungsstriche bei 25/50/75%
+  for (int p = 25; p < 100; p += 25) {
+    int y = barY + barH - (int)(barH * p / 100.0);
+    epaper.drawLine(barX - 6, y, barX, y, EPD_1IN54G_BLACK);
+  }
+
+  String percentStr = String((int)percent) + "%";
+  epaper.setTextSize(2);
+  int16_t x1, y1; uint16_t w, h;
+  epaper.getTextBounds(percentStr, 0, 0, &x1, &y1, &w, &h);
+  epaper.setCursor(100 - w / 2, 175);
+  epaper.print(percentStr);
+
+  float usedGB = sensorData.memory_used.toFloat() / 1073741824.0;
+  String usedStr = String(usedGB, 1) + " GB";
+  epaper.setTextSize(1);
+  epaper.getTextBounds(usedStr, 0, 0, &x1, &y1, &w, &h);
+  epaper.setCursor(200 - w - 5, 5);
+  epaper.print(usedStr);
+
+  epaper.display();
+}
+
+void drawMixedMode() {
+  epaper.fillScreen(EPD_1IN54G_WHITE);
+  epaper.setTextColor(EPD_1IN54G_BLACK);
+
+  // Kreuz-Trennlinien für 4 Quadranten
+  epaper.drawLine(100, 0, 100, 200, EPD_1IN54G_BLACK);
+  epaper.drawLine(0, 100, 200, 100, EPD_1IN54G_BLACK);
+
+  epaper.setTextSize(1);
+  epaper.setCursor(10, 10);
+  epaper.print("CPU");
+  epaper.setTextSize(2);
+  epaper.setCursor(10, 30);
+  epaper.print(String((int)(100 - sensorData.cpu_usage.toFloat())) + "%");
+
+  epaper.setTextSize(1);
+  epaper.setCursor(110, 10);
+  epaper.print("TEMP");
+  epaper.setTextSize(2);
+  epaper.setCursor(110, 30);
+  epaper.print(sensorData.coretemp_package_id_0 + "C");
+
+  epaper.setTextSize(1);
+  epaper.setCursor(10, 110);
+  epaper.print("DISK");
+  epaper.setTextSize(2);
+  epaper.setCursor(10, 130);
+  epaper.print(String((int)sensorData.disk_used_percent.toFloat()) + "%");
+
+  epaper.setTextSize(1);
+  epaper.setCursor(110, 110);
+  epaper.print("MEM");
+  epaper.setTextSize(2);
+  epaper.setCursor(110, 130);
+  epaper.print(String((int)sensorData.memory_used_percent.toFloat()) + "%");
+
+  epaper.display();
 }
 
 void drawDashboard() {
-  DEV_Module_Init();
-  EPD_1IN54G_Init();
-  epaper.fillScreen(EPD_1IN54G_WHITE);
-  epaper.setTextColor(EPD_1IN54G_BLACK);
-  epaper.setTextSize(2);
-  epaper.setCursor(0, 10);
-  epaper.println("CPU Temp: " + sensorData.coretemp_package_id_0 + "C");
-  epaper.println("MB Temp: " + sensorData.pch_cometlake + "C");
-  String cpuUsage = String(100 - sensorData.cpu_usage.toFloat(), 2);
-  cpuUsage.replace(".", ",");
-  epaper.println("CPU Usage: " + cpuUsage + "%");
-  epaper.display();
-  EPD_1IN54G_Sleep();
+  switch (displayMode) {
+    case 0:
+      drawMixedMode();
+      break;
+    case 1:
+      drawCpuMode();
+      break;
+    case 2:
+      drawDiskMode();
+      break;
+    case 3:
+      drawMemoryMode();
+      break;
+  }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(2000);
 
+  LittleFS.begin();
+  File file = LittleFS.open("/query.flux", "r");
+  fluxQuery = file.readString();
+  file.close(); 
+  
   pinMode(4, OUTPUT);
   pinMode(5, OUTPUT);
   pinMode(6, OUTPUT);
@@ -297,15 +535,16 @@ void setup() {
 
   server.begin();
 
-  http.begin("http://192.168.178.73:8086/api/v2/query?org=home");
-  http.addHeader("Authorization", "Token " + String(INFLUX_TOKEN));
-  http.addHeader("Content-Type", "application/vnd.flux");
+  DEV_Module_Init();
+  EPD_1IN54G_Init();
 }
 
 void loop() {
   checkKeyPress();
 
-  if (getServerData()) {
-    drawDashboard();
+  if (refreshDisplay) {
+    if (getServerData()) {
+      drawDashboard();
+    }
   }
 }
