@@ -9,6 +9,8 @@
 #include <HTTPClient.h>
 #include <EPD_1in54g.h>
 #include <EPaperDisplay.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 
 BleKeyboard bleKeyboard;
 Preferences prefs;
@@ -53,22 +55,22 @@ struct ColumnIndices {
 } columnIndices;
 
 struct SensorData {
-  String coretemp_package_id_0;     // CPU Durchschnittstemperatur aller Kerne
-  String coretemp_core_0;           // Temperatur Kern 1
-  String coretemp_core_1;           // Temperatur Kern 2
-  String coretemp_core_2;           // Temperatur Kern 3
-  String coretemp_core_3;           // Temperatur Kern 4
-  String coretemp_core_4;           // Temperatur Kern 5
-  String coretemp_core_5;           // Temperatur Kern 6
-  String pch_cometlake;             // Chipsatz Temperatur
-  String cpu_usage;                 // ~Usage idle -> 100 - cpu_usage = tatsächliche Auslastung
-  String disk_used;                 // Auslastung in Bytes
-  String disk_used_percent;         // Auslastung in Prozent
-  String memory_used;               // Auslastung in Bytes
-  String memory_used_percent;       // Auslastung in Prozent
+  float coretemp_package_id_0;     // CPU Durchschnittstemperatur aller Kerne
+  float coretemp_core_0;           // Temperatur Kern 1
+  float coretemp_core_1;           // Temperatur Kern 2
+  float coretemp_core_2;           // Temperatur Kern 3
+  float coretemp_core_3;           // Temperatur Kern 4
+  float coretemp_core_4;           // Temperatur Kern 5
+  float coretemp_core_5;           // Temperatur Kern 6
+  float pch_cometlake;             // Chipsatz Temperatur
+  float cpu_usage;                 // ~Usage idle -> 100 - cpu_usage = tatsächliche Auslastung
+  float disk_used;                 // Auslastung in Bytes
+  float disk_used_percent;         // Auslastung in Prozent
+  float memory_used;               // Auslastung in Bytes
+  float memory_used_percent;       // Auslastung in Prozent
 } sensorData;
 
-std::map<String, String*> fieldMap = {
+std::map<String, float*> fieldMap = {
   {"coretemp_package_id_0", &sensorData.coretemp_package_id_0},
   {"coretemp_core_0", &sensorData.coretemp_core_0},
   {"coretemp_core_1", &sensorData.coretemp_core_1},
@@ -86,6 +88,15 @@ std::map<String, String*> fieldMap = {
 
 int displayMode = 0;
 bool refreshDisplay = true;
+
+QueueHandle_t displayQueue;
+
+struct DisplayUpdate {
+  int mode;
+  SensorData data;
+  bool isError;
+  int errorCode;
+};
 
 bool lastState[3][5] = {false};
 bool lastRawState[3][5] = {false};
@@ -140,17 +151,37 @@ void checkKeyPress() {
             if (displayMode >= 3) {
               displayMode = 0;
               Serial.println(displayMode);
+              DisplayUpdate update;
+              update.mode = displayMode;
+              update.data = sensorData;
+              update.isError = false;
+              xQueueSend(displayQueue, &update, 0);
             } else {
               displayMode++;
               Serial.println(displayMode);
+              DisplayUpdate update;
+              update.mode = displayMode;
+              update.data = sensorData;
+              update.isError = false;
+              xQueueSend(displayQueue, &update, 0);
             }
           } else if (column == 4 and row == 2 and currentState) {
             if (displayMode <= 0) {
               displayMode = 3;
               Serial.println(displayMode);
+              DisplayUpdate update;
+              update.mode = displayMode;
+              update.data = sensorData;
+              update.isError = false;
+              xQueueSend(displayQueue, &update, 0);
             } else {
               displayMode--;
               Serial.println(displayMode);
+              DisplayUpdate update;
+              update.mode = displayMode;
+              update.data = sensorData;
+              update.isError = false;
+              xQueueSend(displayQueue, &update, 0);
             }
           }
         }
@@ -244,22 +275,22 @@ void evaluateString(String string) {
     // Weißt den Sensoren die Daten zu
     auto it = fieldMap.find(sensor);
     if (it != fieldMap.end()) {
-      *(it->second) = value;
+      *(it->second) = value.toFloat();
     }
   }
-  Serial.println("package: " + sensorData.coretemp_package_id_0);
-  Serial.println("cometlake: " + sensorData.pch_cometlake);
-  Serial.println("usage: " + sensorData.cpu_usage);
-  Serial.println("core 0: " + sensorData.coretemp_core_0);
-  Serial.println("core 1: " + sensorData.coretemp_core_1);
-  Serial.println("core 2: " + sensorData.coretemp_core_2);
-  Serial.println("core 3: " + sensorData.coretemp_core_3);
-  Serial.println("core 4: " + sensorData.coretemp_core_4);
-  Serial.println("core 5: " + sensorData.coretemp_core_5);
-  Serial.println("Used space: " + sensorData.disk_used);
-  Serial.println("Used space: " + sensorData.disk_used_percent);
-  Serial.println("Used memory: " + sensorData.memory_used);
-  Serial.println("Used memory: " + sensorData.memory_used_percent);
+  Serial.println("package: " + String(sensorData.coretemp_package_id_0));
+  Serial.println("cometlake: " + String(sensorData.pch_cometlake));
+  Serial.println("usage: " + String(sensorData.cpu_usage));
+  Serial.println("core 0: " + String(sensorData.coretemp_core_0));
+  Serial.println("core 1: " + String(sensorData.coretemp_core_1));
+  Serial.println("core 2: " + String(sensorData.coretemp_core_2));
+  Serial.println("core 3: " + String(sensorData.coretemp_core_3));
+  Serial.println("core 4: " + String(sensorData.coretemp_core_4));
+  Serial.println("core 5: " + String(sensorData.coretemp_core_5));
+  Serial.println("Used space: " + String(sensorData.disk_used));
+  Serial.println("Used space: " + String(sensorData.disk_used_percent));
+  Serial.println("Used memory: " + String(sensorData.memory_used));
+  Serial.println("Used memory: " + String(sensorData.memory_used_percent));
 }
 
 void drawErrorDisplay(int error) {
@@ -276,6 +307,7 @@ bool getServerData() {
   http.begin("http://192.168.178.73:8086/api/v2/query?org=home");
   http.addHeader("Authorization", "Token " + String(INFLUX_TOKEN));
   http.addHeader("Content-Type", "application/vnd.flux");
+  http.setTimeout(10000);
 
   if (pollIntervall < millis() - lastPollTime) {
     int httpCode = http.POST(fluxQuery);
@@ -288,8 +320,11 @@ bool getServerData() {
     } else {
       String errorBody = http.getString();
       Serial.println("HTTP " + String(httpCode) + ": " + errorBody);
-      drawErrorDisplay(httpCode);
       http.end();
+      DisplayUpdate update;
+      update.isError = true;
+      update.errorCode = httpCode;
+      xQueueSend(displayQueue, &update, 0);
       return false;
     }
   }
@@ -297,16 +332,28 @@ bool getServerData() {
   return false;
 }
 
-void drawCpuMode() {
+void drawModeIndicator(int mode) {
+  int cx = 160, cy = 195, spacing = 10, r = 3;
+  for (int i = 0; i < 4; i++) {
+    int x = cx + i * spacing;
+    if (i == mode) {
+      epaper.fillCircle(x, cy, r, EPD_1IN54G_BLACK);
+    } else {
+      epaper.drawCircle(x, cy, r, EPD_1IN54G_BLACK);
+    }
+  }
+}
+
+void drawCpuMode(SensorData data, int mode) {
   epaper.fillScreen(EPD_1IN54G_WHITE);
   epaper.setTextColor(EPD_1IN54G_BLACK);
 
-  epaper.setTextSize(1);
+  epaper.setTextSize(2);
   epaper.setCursor(5, 5);
   epaper.print("CPU");
 
   // Große zentrierte Auslastungsanzeige
-  float usage = 100 - sensorData.cpu_usage.toFloat();
+  float usage = 100 - data.cpu_usage;
   String usageStr = String((int)usage) + "%";
   epaper.setTextSize(4);
   int16_t x1, y1; uint16_t w, h;
@@ -316,11 +363,11 @@ void drawCpuMode() {
 
   // 6 Balken für die Kerntemperaturen, Höhe skaliert zwischen 30-70°C
   float temps[6] = {
-    sensorData.coretemp_core_0.toFloat(), sensorData.coretemp_core_1.toFloat(),
-    sensorData.coretemp_core_2.toFloat(), sensorData.coretemp_core_3.toFloat(),
-    sensorData.coretemp_core_4.toFloat(), sensorData.coretemp_core_5.toFloat()
+    data.coretemp_core_0, data.coretemp_core_1,
+    data.coretemp_core_2, data.coretemp_core_3,
+    data.coretemp_core_4, data.coretemp_core_5
   };
-  int barTop = 110, barBottom = 170, barW = 20, gap = 6;
+  int barTop = 90, barBottom = 150, barW = 20, gap = 6;
   int startX = (200 - (6 * barW + 5 * gap)) / 2;
   for (int i = 0; i < 6; i++) {
     int barHeight = map(constrain((int)temps[i], 30, 70), 30, 70, 5, barBottom - barTop);
@@ -329,22 +376,24 @@ void drawCpuMode() {
     epaper.fillRect(x, barBottom - barHeight, barW, barHeight, EPD_1IN54G_BLACK);
   }
 
-  epaper.setTextSize(1);
-  epaper.setCursor(5, 185);
-  epaper.print("Pkg " + sensorData.coretemp_package_id_0 + "C  PCH " + sensorData.pch_cometlake + "C");
+  epaper.setTextSize(2);
+  epaper.setCursor(5, 170);
+  epaper.print("Pkg " + String((int)data.coretemp_package_id_0) + "C  PCH " + String((int)data.pch_cometlake) + "C");
+
+  drawModeIndicator(mode);
 
   epaper.display();
 }
 
-void drawDiskMode() {
+void drawDiskMode(SensorData data, int mode) {
   epaper.fillScreen(EPD_1IN54G_WHITE);
   epaper.setTextColor(EPD_1IN54G_BLACK);
 
-  epaper.setTextSize(1);
+  epaper.setTextSize(2);
   epaper.setCursor(5, 5);
   epaper.print("DISK");
 
-  float percent = sensorData.disk_used_percent.toFloat();
+  float percent = data.disk_used_percent;
   int cx = 100, cy = 105, radius = 70, thickness = 14;
 
   // Ring als Gauge: äußerer und innerer Kreisrand
@@ -369,25 +418,27 @@ void drawDiskMode() {
   epaper.setCursor(cx - w / 2, cy - h / 2);
   epaper.print(percentStr);
 
-  float usedGB = sensorData.disk_used.toFloat() / 1073741824.0;
+  float usedGB = data.disk_used / 1073741824.0;
   String usedStr = String(usedGB, 1) + " GB";
   epaper.setTextSize(1);
   epaper.getTextBounds(usedStr, 0, 0, &x1, &y1, &w, &h);
   epaper.setCursor(cx - w / 2, cy + 22);
   epaper.print(usedStr);
 
+  drawModeIndicator(mode);
+
   epaper.display();
 }
 
-void drawMemoryMode() {
+void drawMemoryMode(SensorData data, int mode) {
   epaper.fillScreen(EPD_1IN54G_WHITE);
   epaper.setTextColor(EPD_1IN54G_BLACK);
 
-  epaper.setTextSize(1);
+  epaper.setTextSize(2);
   epaper.setCursor(5, 5);
   epaper.print("MEMORY");
 
-  float percent = sensorData.memory_used_percent.toFloat();
+  float percent = data.memory_used_percent;
   int barX = 70, barY = 30, barW = 60, barH = 130;
 
   epaper.drawRect(barX, barY, barW, barH, EPD_1IN54G_BLACK);
@@ -407,17 +458,19 @@ void drawMemoryMode() {
   epaper.setCursor(100 - w / 2, 175);
   epaper.print(percentStr);
 
-  float usedGB = sensorData.memory_used.toFloat() / 1073741824.0;
+  float usedGB = data.memory_used / 1073741824.0;
   String usedStr = String(usedGB, 1) + " GB";
-  epaper.setTextSize(1);
+  epaper.setTextSize(2);
   epaper.getTextBounds(usedStr, 0, 0, &x1, &y1, &w, &h);
   epaper.setCursor(200 - w - 5, 5);
   epaper.print(usedStr);
 
+  drawModeIndicator(mode);
+
   epaper.display();
 }
 
-void drawMixedMode() {
+void drawMixedMode(SensorData data, int mode) {
   epaper.fillScreen(EPD_1IN54G_WHITE);
   epaper.setTextColor(EPD_1IN54G_BLACK);
 
@@ -425,51 +478,67 @@ void drawMixedMode() {
   epaper.drawLine(100, 0, 100, 200, EPD_1IN54G_BLACK);
   epaper.drawLine(0, 100, 200, 100, EPD_1IN54G_BLACK);
 
-  epaper.setTextSize(1);
+  epaper.setTextSize(2);
   epaper.setCursor(10, 10);
   epaper.print("CPU");
   epaper.setTextSize(2);
-  epaper.setCursor(10, 30);
-  epaper.print(String((int)(100 - sensorData.cpu_usage.toFloat())) + "%");
+  epaper.setCursor(30, 55);
+  epaper.print(String((int)(100 - data.cpu_usage)) + "%");
 
-  epaper.setTextSize(1);
+  epaper.setTextSize(2);
   epaper.setCursor(110, 10);
   epaper.print("TEMP");
   epaper.setTextSize(2);
-  epaper.setCursor(110, 30);
-  epaper.print(sensorData.coretemp_package_id_0 + "C");
+  epaper.setCursor(130, 55);
+  epaper.print(String((int)data.coretemp_package_id_0) + "C");
 
-  epaper.setTextSize(1);
+  epaper.setTextSize(2);
   epaper.setCursor(10, 110);
   epaper.print("DISK");
   epaper.setTextSize(2);
-  epaper.setCursor(10, 130);
-  epaper.print(String((int)sensorData.disk_used_percent.toFloat()) + "%");
+  epaper.setCursor(30, 155);
+  epaper.print(String((int)data.disk_used_percent) + "%");
 
-  epaper.setTextSize(1);
+  epaper.setTextSize(2);
   epaper.setCursor(110, 110);
   epaper.print("MEM");
   epaper.setTextSize(2);
-  epaper.setCursor(110, 130);
-  epaper.print(String((int)sensorData.memory_used_percent.toFloat()) + "%");
+  epaper.setCursor(130, 155);
+  epaper.print(String((int)data.memory_used_percent) + "%");
+
+  drawModeIndicator(mode);
 
   epaper.display();
 }
 
-void drawDashboard() {
-  switch (displayMode) {
+void drawDashboard(SensorData data, int mode) {
+  switch (mode) {
     case 0:
-      drawMixedMode();
+      drawMixedMode(data, mode);
       break;
     case 1:
-      drawCpuMode();
+      drawCpuMode(data, mode);
       break;
     case 2:
-      drawDiskMode();
+      drawDiskMode(data, mode);
       break;
     case 3:
-      drawMemoryMode();
+      drawMemoryMode(data, mode);
       break;
+  }
+}
+
+void displayTask(void *parameter) {
+  DisplayUpdate update;
+  for (;;) {
+    if (xQueueReceive(displayQueue, &update, portMAX_DELAY)) {
+      Serial.println("Empfangen: " + String(update.data.disk_used_percent));
+      if (update.isError) {
+        drawErrorDisplay(update.errorCode);
+      } else {
+        drawDashboard(update.data, update.mode);
+      }
+    }
   }
 }
 
@@ -537,6 +606,18 @@ void setup() {
 
   DEV_Module_Init();
   EPD_1IN54G_Init();
+
+  displayQueue = xQueueCreate(1, sizeof(DisplayUpdate));
+
+  xTaskCreatePinnedToCore(
+    displayTask,
+    "DisplayTask",
+    4096,
+    NULL,
+    1,
+    NULL,
+    0
+  );
 }
 
 void loop() {
@@ -544,7 +625,12 @@ void loop() {
 
   if (refreshDisplay) {
     if (getServerData()) {
-      drawDashboard();
+      DisplayUpdate update;
+      update.mode = displayMode;
+      update.data = sensorData;
+      update.isError = false;
+      Serial.println("Vor Queue-Send: " + String(update.data.disk_used_percent));
+      xQueueSend(displayQueue, &update, 0);
     }
   }
 }
