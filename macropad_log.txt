@@ -1,0 +1,8 @@
+[2026-08-21 00:53:47] --- Terminal on /dev/ttyACM1 | 115200 8-N-1
+[2026-08-21 00:53:47] --- Available filters and text transformations: debug, default, direct, esp32_exception_decoder, hexlify, log2file, nocontrol, printable, send_on_enter, time
+[2026-08-21 00:53:47] --- More details at https://bit.ly/pio-monitor-filters
+[2026-08-21 00:53:47] --- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+[2026-08-21 00:54:06] *wm:AutoConnect: FAILED for  27325 ms
+[2026-08-21 00:54:06] *wm:StartAP with SSID:  Makropad-Setup
+[2026-08-21 00:54:06] *wm:AP IP address: 192.168.4.1
+[2026-08-21 00:54:06] *wm:Starting Web Portal 

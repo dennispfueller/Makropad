@@ -1,10 +1,12 @@
 #include <Arduino.h>
+#include <WiFiManager.h>
 #include <map>
 #include <LittleFS.h>
 #include <BleKeyboard.h>
 #include <Preferences.h>
 #include <secrets.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <ESPAsyncWebServer.h>
 #include <HTTPClient.h>
 #include <EPD_1in54g.h>
@@ -18,36 +20,51 @@ AsyncWebServer server(80);
 HTTPClient http;
 EPaperDisplay epaper;
 
-const unsigned long pollIntervall = 40 * 1000;
+const unsigned long pollIntervall = 90 * 1000;
 unsigned long lastPollTime = 0;
 String fluxQuery;
 
 const char* NVS_KEY_KEYCODES = "keycodes";
 const int rows[3] = {4, 5, 6};
 const int columns[5] = {7, 15, 16, 17, 18};
-uint8_t keycodes[3][5][4] = {
+uint8_t keycodes[3][4][4] = {
   {
     { 'a', 0, 0, 0 },                         
     { 'c', 0, 0, 0 },                                    
     { KEY_LEFT_CTRL, 'c', 0, 0 },                        
-    { KEY_LEFT_CTRL, 'v', 0, 0 },                        
-    { KEY_LEFT_CTRL, 'z', 0, 0 },                        
+    { KEY_LEFT_CTRL, 'v', 0, 0 },                      
   },
   {
     { KEY_LEFT_CTRL, 'x', 0, 0 },                        
     { KEY_LEFT_CTRL, 'a', 0, 0 },                        
     { KEY_LEFT_CTRL, KEY_LEFT_SHIFT, KEY_ESC, 0 },       
-    { KEY_LEFT_ALT, KEY_TAB, 0, 0 },                     
-    { KEY_LEFT_GUI, 'd', 0, 0 },                         
+    { KEY_LEFT_ALT, KEY_TAB, 0, 0 },                        
   },
   {
     { KEY_RETURN, 0, 0, 0 },                             
     { KEY_ESC, 0, 0, 0 },                                
     { KEY_TAB, 0, 0, 0 },                                
-    { KEY_LEFT_CTRL, KEY_LEFT_ALT, KEY_DELETE, 0 },      
-    { KEY_BACKSPACE, 0, 0, 0 },                          
+    { KEY_LEFT_CTRL, KEY_LEFT_ALT, KEY_DELETE, 0 },                       
   },
 };
+
+struct KeyNameEntry { const char* name; uint8_t code; };
+const KeyNameEntry keyNames[] = {
+  {"CTRL", KEY_LEFT_CTRL},
+  {"SHIFT", KEY_LEFT_SHIFT},
+  {"ALT", KEY_LEFT_ALT},
+  {"GUI", KEY_LEFT_GUI},
+  {"ENTER", KEY_RETURN},
+  {"ESC", KEY_ESC},
+  {"TAB", KEY_TAB},
+  {"BACKSPACE", KEY_BACKSPACE},
+  {"DELETE", KEY_DELETE},
+  {"UP", KEY_UP_ARROW},
+  {"DOWN", KEY_DOWN_ARROW},
+  {"LEFT", KEY_LEFT_ARROW},
+  {"RIGHT", KEY_RIGHT_ARROW},
+};
+const int keyNamesCount = sizeof(keyNames) / sizeof(keyNames[0]);
 
 struct ColumnIndices {
   int valueIndex;
@@ -97,6 +114,26 @@ struct DisplayUpdate {
   bool isError;
   int errorCode;
 };
+uint8_t nameToKeycode(String name) {
+  name.trim();
+  if (name.length() == 0) return 0;
+  if (name.length() == 1) return (uint8_t)name.charAt(0);  // einzelner Buchstabe/Ziffer direkt als ASCII-Code
+  String upper = name;
+  upper.toUpperCase();
+  for (int i = 0; i < keyNamesCount; i++) {
+    if (upper == keyNames[i].name) return keyNames[i].code;
+  }
+  return 0;  // unbekannter Name -> leerer Slot
+}
+
+String keycodeToName(uint8_t code) {
+  if (code == 0) return "";
+  for (int i = 0; i < keyNamesCount; i++) {
+    if (keyNames[i].code == code) return keyNames[i].name;
+  }
+  if (code >= 32 && code <= 126) return String((char)code);  // druckbares ASCII-Zeichen
+  return String(code);  // Fallback: unbekannter Code, zeig wenigstens die Zahl
+}
 
 bool lastState[3][5] = {false};
 bool lastRawState[3][5] = {false};
@@ -144,8 +181,10 @@ void checkKeyPress() {
           } else if (column == 4 and row == 0 and currentState) {
             if (refreshDisplay) {
               refreshDisplay = false;
+              Serial.println("Refresh Diplay: false");
             } else {
               refreshDisplay = true;
+              Serial.println("Refresh Display: true");
             }
           } else if (column == 4 and row == 1 and currentState) {
             if (displayMode >= 3) {
@@ -195,15 +234,16 @@ String buildPage() {
   String html = "<html><body><form action='/save' method='POST'>";
   for (int row = 0; row < 3; row++) {
     html += "<div>";
-    for (int column = 0; column < 5; column++) {
+    for (int column = 0; column < 4; column++) {
       html += "<fieldset><legend>Taste " + String(row+1) + "/" + String(column+1) + "</legend>";
       for (int key = 0; key < 4; key++) {
-        html += String("<input name='key_") + row + "_" + column + "_" + key + "' value='" + String(keycodes[row][column][key]) + "'>";
+        html += String("<input name='key_") + row + "_" + column + "_" + key + "' value='" + keycodeToName(keycodes[row][column][key]) + "'>";
       }
       html += "</fieldset>";
     }
     html += "</div>";
   }
+  
   html += "<button type='submit'>Speichern</button>";
   html += "</form></body></html>";
   return html;
@@ -260,8 +300,10 @@ void evaluateString(String string) {
       } else {
         findValueIndex(string.substring(startPosition, endPosition));
       }  
+      /*
       Serial.println("SensorIndex: " + columnIndices.sensorIndex);
       Serial.println("ValueIndex: " + columnIndices.valueIndex);
+      */
     } else if (endPosition == -1) {
       value = findValue(string.substring(startPosition), columnIndices.valueIndex);
       sensor = findValue(string.substring(startPosition), columnIndices.sensorIndex);
@@ -278,6 +320,7 @@ void evaluateString(String string) {
       *(it->second) = value.toFloat();
     }
   }
+  /*
   Serial.println("package: " + String(sensorData.coretemp_package_id_0));
   Serial.println("cometlake: " + String(sensorData.pch_cometlake));
   Serial.println("usage: " + String(sensorData.cpu_usage));
@@ -291,6 +334,7 @@ void evaluateString(String string) {
   Serial.println("Used space: " + String(sensorData.disk_used_percent));
   Serial.println("Used memory: " + String(sensorData.memory_used));
   Serial.println("Used memory: " + String(sensorData.memory_used_percent));
+  */
 }
 
 void drawErrorDisplay(int error) {
@@ -300,7 +344,6 @@ void drawErrorDisplay(int error) {
   epaper.setCursor(0, 10);
   epaper.println(String(error));
   epaper.display();
-  EPD_1IN54G_Sleep();
 }
 
 bool getServerData() {
@@ -321,6 +364,12 @@ bool getServerData() {
       String errorBody = http.getString();
       Serial.println("HTTP " + String(httpCode) + ": " + errorBody);
       http.end();
+
+      if (httpCode == -1) {
+        Serial.println("Verbindungsfehler, WiFi wird neu verbunden...");
+        WiFi.reconnect();
+      }
+
       DisplayUpdate update;
       update.isError = true;
       update.errorCode = httpCode;
@@ -532,7 +581,6 @@ void displayTask(void *parameter) {
   DisplayUpdate update;
   for (;;) {
     if (xQueueReceive(displayQueue, &update, portMAX_DELAY)) {
-      Serial.println("Empfangen: " + String(update.data.disk_used_percent));
       if (update.isError) {
         drawErrorDisplay(update.errorCode);
       } else {
@@ -568,20 +616,10 @@ void setup() {
   }
   prefs.end();
 
-  WiFi.mode(WIFI_STA);
-  Serial.println("Verfügbare Netzwerke:");
-  int n = WiFi.scanNetworks();
-  for (int i = 0; i < n; i++) {
-    Serial.println(WiFi.SSID(i));
-  }
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.print("Verbunden, IP: ");
-  Serial.println(WiFi.localIP());
+  WiFiManager wifiManager;
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+
+  wifiManager.autoConnect("Makropad-Setup");
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send(200, "text/html", buildPage());
@@ -589,10 +627,10 @@ void setup() {
 
   server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request) {
     for (int row = 0; row < 3; row++) {
-      for (int column = 0; column < 5; column++) {
+      for (int column = 0; column < 4; column++) {
         for (int key = 0; key < 4; key++) {
           String value = request->getParam(String("key_") + row + "_" + column + "_" + key, true)->value();
-          keycodes[row][column][key] = value.toInt();
+          keycodes[row][column][key] = nameToKeycode(value);
         }
       }
     }
@@ -625,11 +663,11 @@ void loop() {
 
   if (refreshDisplay) {
     if (getServerData()) {
+      Serial.println("Freier Heap: " + String(ESP.getFreeHeap()));
       DisplayUpdate update;
       update.mode = displayMode;
       update.data = sensorData;
       update.isError = false;
-      Serial.println("Vor Queue-Send: " + String(update.data.disk_used_percent));
       xQueueSend(displayQueue, &update, 0);
     }
   }
